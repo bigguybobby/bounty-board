@@ -1,18 +1,18 @@
-# 🎯 BountyBoard — On-Chain Bounty System
+# 🎯 BountyBoard — On-Chain Bounty Platform
 
-> Post bounties with ETH rewards. Receive submissions. Award winners. Cancel if expired.
+> Post bounties with ETH rewards, submit work, approve/reject, platform fees.
 
 ## Features
 
-- **ETH-funded bounties** — lock reward on creation
-- **Submissions** — anyone can submit (except creator)
-- **Creator judges** — award to best submission
-- **Cancel + refund** — after deadline if no winner
-- **On-chain record** — all submissions stored
+- **Bounty lifecycle** — create, submit, approve, reject, cancel
+- **Platform fees** — configurable basis points on payouts
+- **Deadline enforcement** — submissions before expiry only
+- **Reject & reopen** — creator can reject and reopen for new submissions
+- **Refund on cancel** — full ETH refund to creator
 
 ## Stats
 
-- ✅ **18/18 tests**, 100% line + branch + function coverage
+- ✅ **21/21 tests**, 100% line + branch + function coverage
 
 ## License
 

@@ -1,96 +1,108 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-/// @title BountyBoard — On-chain bounties with submissions, judging, and payouts
+/// @title BountyBoard — Post bounties, submit work, approve & pay
 contract BountyBoard {
-    enum Status { Open, Completed, Cancelled }
+    enum Status { Open, Submitted, Approved, Cancelled }
 
     struct Bounty {
         address creator;
-        string title;
         uint256 reward;
         uint256 deadline;
         Status status;
-        address winner;
-        uint256 submissionCount;
-    }
-
-    struct Submission {
-        address submitter;
-        string details;
-        uint256 timestamp;
+        address hunter;
+        string description;
+        string submission;
     }
 
     uint256 public bountyCount;
     mapping(uint256 => Bounty) public bounties;
-    mapping(uint256 => mapping(uint256 => Submission)) public submissions;
-    mapping(uint256 => mapping(address => bool)) public hasSubmitted;
+    uint256 public platformFee; // bps
+    address public owner;
+    uint256 public feesCollected;
 
-    event BountyCreated(uint256 indexed id, address indexed creator, string title, uint256 reward, uint256 deadline);
-    event SubmissionAdded(uint256 indexed bountyId, uint256 subId, address indexed submitter);
-    event BountyAwarded(uint256 indexed id, address indexed winner, uint256 reward);
-    event BountyCancelled(uint256 indexed id);
+    event Created(uint256 indexed id, address indexed creator, uint256 reward);
+    event Submitted(uint256 indexed id, address indexed hunter);
+    event Approved(uint256 indexed id, address indexed hunter, uint256 payout);
+    event Rejected(uint256 indexed id);
+    event Cancelled(uint256 indexed id);
 
-    function createBounty(string calldata _title, uint256 _deadline) external payable returns (uint256 id) {
-        require(msg.value > 0, "zero reward");
-        require(bytes(_title).length > 0, "empty title");
+    modifier onlyOwner() { require(msg.sender == owner, "not owner"); _; }
+
+    constructor(uint256 _fee) {
+        require(_fee <= 500, "fee too high");
+        owner = msg.sender;
+        platformFee = _fee;
+    }
+
+    function create(uint256 _deadline, string calldata _desc) external payable returns (uint256 id) {
+        require(msg.value > 0, "no reward");
         require(_deadline > block.timestamp, "past deadline");
+        require(bytes(_desc).length > 0, "empty desc");
 
         id = bountyCount++;
-        bounties[id] = Bounty(msg.sender, _title, msg.value, _deadline, Status.Open, address(0), 0);
-        emit BountyCreated(id, msg.sender, _title, msg.value, _deadline);
+        bounties[id] = Bounty(msg.sender, msg.value, _deadline, Status.Open, address(0), _desc, "");
+        emit Created(id, msg.sender, msg.value);
     }
 
-    function submit(uint256 _bountyId, string calldata _details) external {
-        Bounty storage b = bounties[_bountyId];
+    function submit(uint256 _id, string calldata _work) external {
+        Bounty storage b = bounties[_id];
         require(b.status == Status.Open, "not open");
-        require(block.timestamp < b.deadline, "past deadline");
+        require(block.timestamp <= b.deadline, "expired");
         require(msg.sender != b.creator, "creator cant submit");
-        require(!hasSubmitted[_bountyId][msg.sender], "already submitted");
-        require(bytes(_details).length > 0, "empty details");
+        require(bytes(_work).length > 0, "empty work");
 
-        uint256 subId = b.submissionCount++;
-        submissions[_bountyId][subId] = Submission(msg.sender, _details, block.timestamp);
-        hasSubmitted[_bountyId][msg.sender] = true;
-        emit SubmissionAdded(_bountyId, subId, msg.sender);
+        b.hunter = msg.sender;
+        b.submission = _work;
+        b.status = Status.Submitted;
+        emit Submitted(_id, msg.sender);
     }
 
-    function award(uint256 _bountyId, uint256 _subId) external {
-        Bounty storage b = bounties[_bountyId];
+    function approve(uint256 _id) external {
+        Bounty storage b = bounties[_id];
         require(msg.sender == b.creator, "not creator");
-        require(b.status == Status.Open, "not open");
-        require(_subId < b.submissionCount, "invalid submission");
+        require(b.status == Status.Submitted, "not submitted");
 
-        Submission storage s = submissions[_bountyId][_subId];
-        b.status = Status.Completed;
-        b.winner = s.submitter;
+        b.status = Status.Approved;
+        uint256 fee = (b.reward * platformFee) / 10000;
+        uint256 payout = b.reward - fee;
+        feesCollected += fee;
 
-        (bool ok,) = s.submitter.call{value: b.reward}("");
+        (bool ok,) = b.hunter.call{value: payout}("");
         require(ok, "payout failed");
-        emit BountyAwarded(_bountyId, s.submitter, b.reward);
+        emit Approved(_id, b.hunter, payout);
     }
 
-    function cancel(uint256 _bountyId) external {
-        Bounty storage b = bounties[_bountyId];
+    function reject(uint256 _id) external {
+        Bounty storage b = bounties[_id];
+        require(msg.sender == b.creator, "not creator");
+        require(b.status == Status.Submitted, "not submitted");
+        b.status = Status.Open;
+        b.hunter = address(0);
+        b.submission = "";
+        emit Rejected(_id);
+    }
+
+    function cancel(uint256 _id) external {
+        Bounty storage b = bounties[_id];
         require(msg.sender == b.creator, "not creator");
         require(b.status == Status.Open, "not open");
-        require(block.timestamp >= b.deadline, "not expired");
-
         b.status = Status.Cancelled;
         (bool ok,) = b.creator.call{value: b.reward}("");
         require(ok, "refund failed");
-        emit BountyCancelled(_bountyId);
+        emit Cancelled(_id);
     }
 
-    function getBounty(uint256 _id) external view returns (
-        address creator, string memory title, uint256 reward, uint256 deadline, Status status, address winner, uint256 subCount
-    ) {
+    function withdrawFees() external onlyOwner {
+        uint256 f = feesCollected;
+        require(f > 0, "no fees");
+        feesCollected = 0;
+        (bool ok,) = owner.call{value: f}("");
+        require(ok, "withdraw failed");
+    }
+
+    function getBounty(uint256 _id) external view returns (address creator, uint256 reward, uint256 deadline, Status status, address hunter) {
         Bounty storage b = bounties[_id];
-        return (b.creator, b.title, b.reward, b.deadline, b.status, b.winner, b.submissionCount);
-    }
-
-    function getSubmission(uint256 _bountyId, uint256 _subId) external view returns (address submitter, string memory details, uint256 timestamp) {
-        Submission storage s = submissions[_bountyId][_subId];
-        return (s.submitter, s.details, s.timestamp);
+        return (b.creator, b.reward, b.deadline, b.status, b.hunter);
     }
 }
